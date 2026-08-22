@@ -1,0 +1,31 @@
+---
+description: Prospective Memory 仓库身份、目录约定与改动边界
+alwaysApply: true
+---
+
+# 本仓库
+
+在 PM-Bench 上评估 LLM agent 的前瞻记忆。主方法是 `--setup intention`（结构化意图库），对照为 baseline / Mem0 / A-Mem。
+
+这不是产品生成器。不要新建 FastAPI/网页子项目，不要把 CLI 改成 Web。
+
+## 目录
+
+- `code/run_pm_memory.py` — 实验入口
+- `code/pm_memory/` — 记忆后端（intention / mem0 / amem）与 `session.py`
+- `code/llm_env.py` — 从仓库根 `.env` 读 API（对照 `.env.example`）
+- `docs/notes/` — 实验记录；`intention.md` 版本表（用户维护，只读），`intention_impl.md` 实现对照
+- `data/PMBench/runs/` — 实验产物（score / jsonl / intentions）
+- `third_party/`、`data/PMBench/` 基准代码 — 只读，除非用户明确要求改
+
+## 硬规则
+
+- 密钥只走 `.env`，不硬编码、不提交
+- 改 intention 前以 **当前代码** 为准；`intention_impl.md` 可能落后于 `Intention` 字段
+- **不要改** `docs/notes/intention.md`（用户自己写版本/问题）；实现对照写 `intention_impl.md` 或当面汇报，除非用户明确要求改该文件
+- 未要求时不要跑完整周 LLM 实验（费钱、很慢）
+- 改进 intention：先 `scripts/analyze_intention_run.py`，再追 2–3 条 miss 的运行日志（jsonl / steps / memory / run.log）对照计划实现，然后 `scripts/probe_intention_store.py`；slice 小场景需用户同意才跑 LLM（skill: intention-iterate）
+- 分数低不要只报聚合指标；analyze 的 `examples` 落到 `task_id`，看日志里哪一步没按计划走
+- 记忆失败不得中断 PM 步；空记忆继续
+- 回复用简体中文，除非用户改用其他语言
+- 长任务续跑：先看 `.cursor/grind.enabled`。`off` 时不要开 scratchpad；`on` 才走 `.cursor/scratchpad.md` + grind（见 `rules/grind.mdc`）。短问答不要开续跑

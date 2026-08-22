@@ -1,0 +1,72 @@
+\section{Motivation and Preliminaries}
+
+\subsection{Motivation: From Needle Retrieval to When-to-Act}
+
+Retrospective memory benchmarks reward recovering a fact that already occurred. Prospective settings reward a different competence: the agent must (i)~encode an intention when it is announced, (ii)~keep it available across intervening steps and days, (iii)~detect when its trigger is satisfied---often only after querying a channel that is hidden by default---and (iv)~execute exactly the due actions while refusing lures and honoring cancel/reschedule/override updates. PM-Bench~\cite{pmbench2026} makes this operational: even when intentions are written into a ledger, agents under-monitor non-clock channels (best hidden-channel hit reported near $16.7\%$), struggle on cross-day commitments, and face a precision--recall dilemma under heartbeats.
+
+These failures suggest that ``store more text in memory'' is the wrong inductive bias. What is needed is a \emph{conditional} representation: the intention is not an answer candidate for a user question, but a dormant policy fragment ``if $\varphi$ holds, do $\alpha$'' with mutable status $\sigma$. We call such records \textbf{conditional memory}. The remainder of this section formalizes the PM-Bench interaction model and our intention abstraction; Section~\ref{sec:methods} then presents ProMem as a scaffold built around this abstraction.
+
+\subsection{Preliminaries: PM-Bench Interaction Model}
+
+We follow the PM-Bench Virtual Week protocol~\cite{pmbench2026}. Time proceeds in discrete steps $t=1,\ldots,T$ over a simulated week (released setting: $T{=}80$ steps, irregular day schedules). At step $t$ the agent observes a narrative vignette $v_t$, a menu of mandatory ongoing activities $\mathcal{C}_t=\{A,B,C\}$, and a set of anonymous prospective action handles $X_t$ that mixes true task actions with \emph{lures}. A collection of state channels $\mathcal{H}$ (clock, email, portal, \ldots) is \emph{hidden}: contents are revealed only if the agent issues monitoring queries.
+
+\noindent\textbf{Query-then-act protocol.}
+Each step proceeds as:
+\begin{enumerate}
+    \item The agent may issue zero or more monitoring queries $q_t\subseteq\mathcal{H}$ and observe returns $r_t=\mathrm{Read}(q_t)$.
+    \item The agent submits $a_t=(c_t,\hat{D}_t)$ where $c_t\in\mathcal{C}_t$ is the ongoing activity and $\hat{D}_t\subseteq X_t$ is the set of prospective actions declared due now.
+\end{enumerate}
+
+\noindent\textbf{Due set.}
+Let $\mathcal{I}$ be the set of task definitions. Each task $\tau$ carries a trigger condition and an executable action. Write $X_t$ for the handles available at $t$. The ground-truth due set is
+\begin{equation}
+\label{eq:due-set}
+D_t = \{\tau \in X_t : \tau\text{ is still valid and its execution condition holds at }t\},
+\end{equation}
+where event-based tasks become due when the relevant cue appears in $v_t$ or in queried channel returns, and time-based tasks become due when the simulated clock matches a target time (or falls in an allowed window). Validity excludes canceled tasks and respects the latest reschedule/override.
+
+\noindent\textbf{Objective.}
+PM-Bench aggregates set overlap over the trajectory:
+\begin{equation}
+\label{eq:set-f1}
+\mathrm{TP}=\sum_t |D_t\cap\hat{D}_t|,\;
+\mathrm{FP}=\sum_t |\hat{D}_t\setminus D_t|,\;
+\mathrm{FN}=\sum_t |D_t\setminus\hat{D}_t|,
+\end{equation}
+\begin{equation}
+\mathrm{Set\text{-}F1}=\frac{2\,\mathrm{TP}}{2\,\mathrm{TP}+\mathrm{FP}+\mathrm{FN}}.
+\end{equation}
+Precision-only metrics reward never acting; recall-only metrics reward firing every handle every step. Set-F1 requires both hitting dues and suppressing false alarms---the natural objective for conditional memory.
+
+\subsection{Conditional Memory Formalism}
+
+\begin{definition}[Conditional memory / intention]
+\label{def:intention}
+An intention is a tuple
+\[
+I = (\varphi,\alpha,\sigma,\mathrm{meta}),
+\]
+where $\varphi$ is a trigger predicate over observable evidence (narrative text, channel returns, clock), $\alpha$ is an executable action handle, $\sigma\in\Sigma$ is a lifecycle state, and $\mathrm{meta}$ stores identifiers, announce step, schedule metadata, and free-text glosses for the LLM.
+\end{definition}
+
+We take the lifecycle alphabet
+\[
+\Sigma=\{\textsc{announced},\textsc{active},\textsc{fired},\textsc{completed},\textsc{canceled},\textsc{modified}\}.
+\]
+Informally: intentions enter as \textsc{announced} when first stated; become \textsc{active} once admitted to the Prospective Intention Store; transition to \textsc{fired} when selected in $\hat{D}_t$ and to \textsc{completed} when execution is accepted by the environment; move to \textsc{canceled} on cancel events; and to \textsc{modified} (then typically back to \textsc{active} with updated $\varphi$) on reschedule/override.
+
+\begin{definition}[Conditional vs.\ episodic memory]
+\label{def:vs-episodic}
+An \emph{episodic / retrospective} record $e$ is content indexed for retrieval under a query $q$, scoring $\mathrm{sim}(e,q)$. A \emph{conditional} record $I$ is content indexed for \emph{trigger evaluation}: at step $t$ one asks whether evidence $e_t=(v_t,r_t)$ satisfies $\varphi$, not whether $I$ answers a user question. The two stores may share surface text but differ in API, update rules, and success metric (Set-F1 vs.\ QA accuracy).
+\end{definition}
+
+\begin{proposition}[Due set as trigger satisfaction]
+\label{prop:due}
+Under a perfect monitor and faithful lifecycle, 
+\[
+D_t = \{\alpha(I) : I\in\mathcal{P}_t,\;\sigma(I)\in\{\textsc{active},\textsc{modified}\},\; e_t\models\varphi(I)\},
+\]
+where $\mathcal{P}_t$ is the set of intentions still stored at $t$. Failures of monitoring ($e_t$ missing channel facts), stale $\sigma$, or lure confusion yield $\hat{D}_t\neq D_t$.
+\end{proposition}
+
+Proposition~\ref{prop:due} isolates why retrospective RAG is insufficient: retrieval may surface the intention text even when $\varphi$ is false (false alarm) or fail to re-check channels when $\varphi$ would be true (miss). Conditional memory makes $\varphi$, $\alpha$, and $\sigma$ explicit so that monitoring, updating, and scoring can be specialized.

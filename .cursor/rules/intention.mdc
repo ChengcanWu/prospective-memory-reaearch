@@ -1,0 +1,31 @@
+---
+description: Intention store 实现约定与 PM-Bench 反作弊边界
+globs: code/pm_memory/**/*.py,docs/notes/intention*.md
+alwaysApply: false
+---
+
+# Intention
+
+当前 schema（见 `Intention` / `DueSlot`，不是旧的 summary/trigger_kind）：
+
+```text
+intent_id, action, status(pending|done|canceled)
+due: { day?, time? }    # day 仅命名 weekday，禁止用种植日；time 有则 TIME-DUE
+event_cue               # 注入给 choose；库不盖 EVENT-CUED
+watch                   # channel 名列表；不强制 query_state
+```
+
+时钟只认本步系统格式（`extract_step_clock`）：`Time: HH:MM | Stopwatch` 或 `State [clock]`。禁止用叙述里的 `at 11:00`、菜单到期、上一步 `_time`。
+
+## 谁决定到期
+
+- TIME-DUE：代码打软标签，分钟必须相等（tolerance 默认 0）；无钟则 `force_check_time`。未命中的时钟行仍进 TODAY pending，choose 自己决定是否做。不要硬丢掉菜单点选，不要用 overlap 对齐菜单。
+- 事件是否发生：**Scene Judge** 看本步 vignette，标 event_due（不改 status）；不要恢复 EVENT-CUED 子串盖章。未命中的 event 行从注入去掉
+- 查 channel：**choose 模型**仍自己决定是否 `query_state`；不要每步强制。Scene Judge 只在**已有**本步 `State [channel]` 后标 CHANNEL due / 筛掉未到期；无 State 的 watch 留着
+- 改期/取消：同一 Scene Judge 的 `updates`（cancel / reschedule / override）。线索出现是 event_due，禁止写成 cancel。不要整步误杀无关 pending
+- leftover：换日不得批量 cancel。取消只走 Scene Judge 的 cancel。未来 `due.day` 先不注入；空 due / 当天 / 已过 due 仍列出
+- 菜单对齐：**choose 模型**按 meaning 做；不要用 overlap 把对不上菜单的 pending 从注入里丢掉
+- 入库：一律新建。不要用 overlap 把新意图并进旧条
+- 标 done：**Done Judge** 按序号 `n`；不要用 overlap 勾掉
+
+`force_check_time`（走合法 `check_time` 通道）可以保留；强制查业务 channel 不行。

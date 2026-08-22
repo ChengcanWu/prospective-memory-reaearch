@@ -1,0 +1,3 @@
+# Grind 自动续跑总开关。改成 on 才会读 scratchpad 并在 stop 时续跑。
+# 取值：on / off
+off

@@ -1,0 +1,15 @@
+# Runner + intention / baseline（不包含 Mem0 / A-Mem 的完整依赖）
+openai>=1.0.0
+
+# A-Mem（--setup amem）额外需要，见 third_party/A-mem-main/requirements.txt
+# numpy
+# sentence-transformers
+# scikit-learn
+# torch
+# transformers
+# nltk
+# rank-bm25
+# litellm
+
+# Mem0（--setup mem0）：从 third_party/mem0-main 安装
+# pip install -e third_party/mem0-main

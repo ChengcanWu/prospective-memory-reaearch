@@ -1,0 +1,18 @@
+---
+description: 分数低时落到具体失败例子，对照运行日志与计划实现。用于看 score、分析 miss、低分、找例子、看日志。
+alwaysApply: true
+---
+
+# 低分先追例子，再改代码
+
+不要只报 Set-F1 / Update miss% / Cross-day miss%。analyze 的 `priority` 只用来选 **一个** family。
+
+改库或写「问题」之前必须：
+
+1. 从 analyze `examples` 或 `*.score.md` 取出 **2–3 条** miss（`task_id` + day + `step_id`）
+2. 在同一次 run 里读日志，看这一条在哪一步断了
+3. 对照 `intention.md` 该版计划与 **当前代码**，判断是没按计划实现，还是计划做了但 choose 没听
+
+日志（同一 stem）：`*.jsonl`（是否点到 GT）→ `*.intentions.steps.jsonl`（库 / 注入 / Update / encode）→ `*.memory.jsonl`（choose 实际看到的块）→ `run.log`（vignette / menu）。`d3_s4` 对应 steps 里该日的 `s4`。
+
+详情见 skill `intention-iterate`。未要求时不要为了分析重跑整周 LLM。

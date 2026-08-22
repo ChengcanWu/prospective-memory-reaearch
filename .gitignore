@@ -1,0 +1,16 @@
+.DS_Store
+**/.DS_Store
+**/__pycache__/
+*.pyc
+*.pyo
+.Python
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+*.egg-info/
+.pytest_cache/
+.tmp_remote_inspect/
+.cursor/run-memory/
+data/slices/*.json

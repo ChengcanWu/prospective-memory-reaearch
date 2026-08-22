@@ -1,0 +1,76 @@
+\section*{Appendix}
+\renewcommand{\thesubsection}{\thesection.\arabic{subsection}}
+
+\section{A. Algorithm of ProMem}
+\label{sec:Algorithm}
+
+Algorithm~\ref{alg:promem} summarizes one Virtual Week episode under the PM-Bench query-then-act protocol (Section~\ref{sec:methods}). Dual memory, lifecycle updates, monitoring, and due-set scoring are explicit; the backbone LLM is invoked inside $\mathrm{ParseAnnounce}$, $\mathrm{Sat}$, $\mathrm{IsLure}$, and activity choice as needed.
+
+\begin{algorithm}[h]
+\caption{ProMem on a PM-Bench episode}
+\label{alg:promem}
+\textbf{Input}: Episode horizon $T$; channel set $\mathcal{H}$; thresholds $\theta_{\mathrm{mon}},\theta_{\mathrm{due}}$; query budget schedule $\{K_t\}$; backbone LLM $f$\\
+\textbf{Output}: Actions $\{a_t=(c_t,\hat{D}_t)\}_{t=1}^{T}$; metrics via official evaluator\\
+\textbf{Init}: $\mathcal{E}_0\leftarrow\emptyset$, $\mathcal{P}_0\leftarrow\emptyset$
+\begin{algorithmic}[1]
+\FOR{$t=1$ to $T$}
+\STATE Observe $o_t\leftarrow(v_t,\mathcal{C}_t,X_t)$ \COMMENT{vignette, ongoing menu, action handles}
+\STATE $(\mathcal{P}_t,\mathcal{E}_t)\leftarrow\mathrm{IngestAnnouncesAndUpdates}(\mathcal{P}_{t-1},\mathcal{E}_{t-1},o_t)$ 
+\STATE \COMMENT{parse new $I=(\varphi,\alpha,\sigma,\mathrm{meta})$; apply cancel/reschedule/override to $\sigma,\varphi$}
+\STATE $\mathcal{P}_t^{\mathrm{open}}\leftarrow\{I\in\mathcal{P}_t:\sigma(I)\in\{\textsc{active},\textsc{modified}\}\}$
+\FORALL{$h\in\mathcal{H}$}
+\STATE $s_{\mathrm{mon}}(h)\leftarrow\sum_{I\in\mathcal{P}_t^{\mathrm{open}}} w(I)\,\mathbb{1}[h\in\mathrm{deps}(I)]\,\rho(I,t)$
+\ENDFOR
+\STATE $q_t\leftarrow\mathrm{TopK}(\{h:s_{\mathrm{mon}}(h)\ge\theta_{\mathrm{mon}}\},K_t)$; optionally refine $q_t$ with $f$
+\STATE $r_t\leftarrow\mathrm{Read}(q_t)$; $\mathcal{E}_t\leftarrow\mathcal{E}_t\cup\mathrm{Log}(r_t)$
+\STATE $e_t\leftarrow(v_t,r_t)$
+\FORALL{$x\in X_t$}
+\STATE $\mathcal{M}(x)\leftarrow\mathrm{Match}(x,\mathcal{P}_t^{\mathrm{open}})$
+\STATE $s_{\mathrm{due}}(x)\leftarrow\max_{I\in\mathcal{M}(x)}\big(\mathrm{Sat}(\varphi(I),e_t)-\lambda_{\mathrm{life}}\mathrm{Pen}(\sigma(I))-\lambda_{\mathrm{lure}}\mathrm{IsLure}(x)\big)$
+\STATE \COMMENT{if $\mathcal{M}(x)=\emptyset$, take $s_{\mathrm{due}}(x)\leftarrow -\lambda_{\mathrm{lure}}\mathrm{IsLure}(x)$}
+\ENDFOR
+\STATE $\hat{D}_t\leftarrow\{x\in X_t:s_{\mathrm{due}}(x)\ge\theta_{\mathrm{due}}\}$
+\STATE $c_t\leftarrow\mathrm{ChooseOngoing}(f;v_t,\mathcal{C}_t,\mathrm{Brief}(\mathcal{P}_t^{\mathrm{open}}))$
+\STATE Submit $a_t\leftarrow(c_t,\hat{D}_t)$
+\STATE $\mathcal{P}_t\leftarrow\mathrm{LifecycleAfterAct}(\mathcal{P}_t,\hat{D}_t)$ \COMMENT{active$\rightarrow$fired/completed as applicable}
+\ENDFOR
+\STATE \textbf{return} $\{a_t\}$; compute Set-F1, hits, query count with replay evaluator
+\end{algorithmic}
+\end{algorithm}
+
+\section{B. Additional Formal Notes}
+\label{sec:formal-notes}
+
+\subsection{B.1 Trigger satisfaction}
+For time-based intentions, $\mathrm{Sat}(\varphi,e_t)=1$ iff the clock channel (if read) or officially exposed step time lies in the target window. For event-based intentions, $\mathrm{Sat}$ is an entailment judgment between cue descriptors and $v_t$. For channel-based intentions, $\mathrm{Sat}=0$ unless the required $h$ was queried and the return matches $\varphi$; this encodes the monitoring bottleneck in the scorer itself.
+
+\subsection{B.2 Relation to Set-F1 gradients (informal)}
+Raising $\theta_{\mathrm{due}}$ decreases expected FP and increases FN; raising monitoring budget $K_t$ increases the chance that channel-based $\mathrm{Sat}$ flips from $0$ to $1$, lowering FN at some FP risk if lure handles share lexical features with true tasks. ProMem's $\mathrm{IsLure}$ and lifecycle penalties are designed to flatten that FP risk.
+
+\section{C. Implementation Checklist}
+\label{sec:impl-checklist}
+
+\noindent\textbf{PIS schema fields.} \texttt{id}, \texttt{trigger\_type}, \texttt{trigger\_spec}, \texttt{action\_handle}, \texttt{state}, \texttt{announce\_step}, \texttt{deps}, \texttt{gloss}.\\
+\noindent\textbf{Update events.} Detect cancel / reschedule / override spans; map references to \texttt{id}; rewrite \texttt{trigger\_spec} or set \texttt{state=canceled}.\\
+\noindent\textbf{Logging.} Record $q_t$, $r_t$, $\hat{D}_t$, and PIS snapshots for slice metrics (channel / cross-day / update).\\
+\noindent\textbf{Hyperparameters (defaults TBD).} $\theta_{\mathrm{mon}}$, $\theta_{\mathrm{due}}$, $K_t$, $\lambda_{\mathrm{life}}$, $\lambda_{\mathrm{lure}}$, urgency schedule $\rho$.
+
+\section{D. Extended Experimental Placeholders}
+\label{sec:ext-exp}
+
+\begin{table}[h]
+\centering
+\caption{Per-backbone Set-F1 on PM-Bench (placeholders).}
+\label{tab:per-backbone}
+\begin{tabular}{l|cccc}
+\toprule
+\textbf{Scaffold} & Backbone A & Backbone B & Backbone C & Macro \\
+\midrule
+Optional heartbeat & -- & -- & -- & -- \\
+Todo-ledger & -- & -- & -- & -- \\
+ProMem & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Expected pattern (from PM-Bench): scaffold rank may interact with backbone; ProMem should reduce variance by externalizing $\sigma$ and $\varphi$ rather than relying on in-context vigilance alone.

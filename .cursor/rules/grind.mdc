@@ -1,0 +1,24 @@
+---
+description: Grind stop-hook：长任务工作记忆、自动续跑与收尾重置
+alwaysApply: true
+---
+
+# Grind 续跑协议
+
+总开关：`.cursor/grind.enabled`。写成 `off`（当前）时不要维护 scratchpad、不要把 STATUS 改成 `in_progress`；stop hook 直接退出。要续跑时改成 `on`，再按下面填 scratchpad。
+
+`stop` hook 仅在开关为 `on` 时读 `.cursor/scratchpad.md`。`in_progress` 会自动再提交一轮（`loop_limit` 20）；`idle` / `DONE` 不续跑。不要把 `loop_limit` 改成无限。
+
+## 何时维护 scratchpad
+
+- **要维护**：多步改代码、修 bug、对照 `intention_impl`、按日志迭代。开始时 `STATUS: in_progress`，写清 Goal；Checklist 拆成 3–10 个可验证小项；Current Step **只留一个动作**。
+- **不要动**：普通问答、解释、只读代码。保持 `idle`。
+- **禁止写进 Checklist**：未要求时的完整周 LLM 实验。验证用 `scripts/analyze_intention_run.py`、`scripts/probe_intention_store.py`、已有 `*.score.md`，或用户同意的 `data/slices/*.json`。
+
+## 每一轮
+
+先看 Last Failure，再做 Current Step，不要问用户要不要继续。证伪的方法写入 Learnings；验证写入 Validation。hook 会从终端兜底补这些栏，但人在场时应手写更高质量的根因。按实验分数迭代时，Evidence 必须落到具体 `task_id` + 日志路径，不要只写 miss%。
+
+## 收尾
+
+Checklist 全部达成 → `STATUS: DONE`（hook 会把本轮 scratchpad 归档到 `.cursor/run-memory/` 并重置为 idle 模板）。不要让旧 Goal 留着污染下一任务。

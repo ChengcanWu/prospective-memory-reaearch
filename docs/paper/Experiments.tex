@@ -1,0 +1,138 @@
+\section{Experiments}
+\label{sec:experiments}
+
+We design experiments to test whether conditional memory---as implemented by ProMem---improves prospective competence on PM-Bench and related conditional-instruction settings. Reported cells use ``--'' as placeholders pending final runs; qualitative expectations follow each table.
+\vspace{10pt}
+\subsection{Experiment Setup}
+
+\noindent\textbf{Primary benchmark: PM-Bench Virtual Week.}
+We evaluate on the released PM-Bench week~\cite{pmbench2026}: $7$ days, $T{=}80$ steps, $81$ scored executable tasks (event- and time-based; regular and non-regular), including channel-triggered, cross-day, and update events, plus lure actions and hidden channels. Agents follow the official query-then-act protocol and replay-based evaluator so that due sets $\{D_t\}$ and scoring are identical across systems.
+
+\noindent\textbf{Metrics.}
+\begin{itemize}
+    \item \textbf{Set-F1} (primary), with cumulative TP / FP / FN as in Eqs.~\eqref{eq:set-f1}.
+    \item \textbf{FP / FN} counts (operating-point diagnostics).
+    \item \textbf{Channel hit}: hit rate on hidden-channel-required dues.
+    \item \textbf{Cross-day hit}: hit rate on intentions announced on an earlier day than the cue.
+    \item \textbf{Update-sensitive hit}: hit rate on tasks affected by cancel / reschedule / override.
+    \item \textbf{Monitoring overhead}: number of channel queries issued over the week.
+\end{itemize}
+We also report narrative-cued and clock-required slices when available for analysis.
+
+\noindent\textbf{Backbones.}
+Following PM-Bench, we plan multiple backbones spanning closed and open models (e.g., GPT-family and open 8B--70B-class models). Each backbone$\times$scaffold pair is a separate run; macro averages mirror the benchmark's reporting style.
+
+\noindent\textbf{Baselines.}
+We compare against the scaffolds studied in PM-Bench~\cite{pmbench2026}:
+\begin{itemize}
+    \item \textbf{Single}: one model, no external memory beyond the prompt.
+    \item \textbf{Todo-ledger}: in-context ledger of pending intentions, cues/times, and completion bits.
+    \item \textbf{Optional heartbeat}: model may enable periodic self-reminders to re-check channels.
+    \item \textbf{Auto-heartbeat (60m / 30m)}: fixed periodic wakes.
+    \item \textbf{Hierarchical union-query}: coordinator with subagents proposing queries; union then final action.
+\end{itemize}
+\textbf{ProMem} uses dual stores + lifecycle + $\pi_{\mathrm{mon}}$ + $\pi_{\mathrm{due}}$ as in Section~\ref{sec:methods}.
+
+\noindent\textbf{Implementation notes.}
+Prompts, PIS schemas, and thresholds $(\theta_{\mathrm{mon}},\theta_{\mathrm{due}},K_t)$ will be detailed in the appendix upon release. Unless noted, base model weights are frozen; ProMem is an inference-time controller.
+\vspace{10pt}
+\subsection{Main Results on PM-Bench}
+
+\begin{table}[h]
+\centering
+\caption{PM-Bench primary results (placeholders). Higher Set-F1 / hits are better; lower FP and monitoring overhead are better when Set-F1 is held fixed. ``--'' = pending.}
+\setlength{\tabcolsep}{3pt}
+\label{tab:pmbench-main}
+\begin{tabular}{l|ccccccc}
+\toprule
+\textbf{Method} & Set-F1$\uparrow$ & FP$\downarrow$ & FN$\downarrow$ & Chan.\ hit$\uparrow$ & Cross-day$\uparrow$ & Update$\uparrow$ & Queries$\downarrow$ \\
+\midrule
+Single & -- & -- & -- & -- & -- & -- & -- \\
+Todo-ledger & -- & -- & -- & -- & -- & -- & -- \\
+Optional heartbeat & -- & -- & -- & -- & -- & -- & -- \\
+Auto-heartbeat 60m & -- & -- & -- & -- & -- & -- & -- \\
+Auto-heartbeat 30m & -- & -- & -- & -- & -- & -- & -- \\
+Hierarchical union-query & -- & -- & -- & -- & -- & -- & -- \\
+\midrule
+ProMem (ours) & -- & -- & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\vspace{6pt}
+\end{table}
+
+\noindent\textbf{Expected findings.}
+We expect ProMem to achieve the best or near-best \textbf{Set-F1} by improving the precision--recall operating point relative to auto-heartbeats (which historically raise update hit at the cost of large FP) and hierarchical querying (high query count, weak channel$\rightarrow$action conversion). Gains should concentrate on \textbf{channel hit} and \textbf{cross-day hit}, where intention-conditioned monitoring and persistent PIS state are most relevant, and on \textbf{update-sensitive hit}, where lifecycle penalties suppress stale fires after cancel/reschedule. Monitoring overhead should lie below hierarchical union-query and ideally near optional-heartbeat efficiency while exceeding its channel coverage.
+\vspace{10pt}
+\subsection{Ablation Study}
+
+\begin{table}[h]
+\centering
+\caption{ProMem ablations on PM-Bench (placeholders). Each row removes one component.}
+\setlength{\tabcolsep}{4pt}
+\label{tab:ablation}
+\begin{tabular}{l|ccccc}
+\toprule
+\textbf{Variant} & Set-F1 & Chan.\ hit & Cross-day & Update & Queries \\
+\midrule
+Full ProMem & -- & -- & -- & -- & -- \\
+\quad w/o PIS (flat episodic only) & -- & -- & -- & -- & -- \\
+\quad w/o proactive monitor & -- & -- & -- & -- & -- \\
+\quad w/o lifecycle updates & -- & -- & -- & -- & -- \\
+\quad Retrospective-RAG-only & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\vspace{6pt}
+\end{table}
+
+\noindent\textbf{Ablation definitions.}
+\begin{itemize}
+    \item \textbf{w/o PIS:} intentions written only into the episodic bank; no typed $(\varphi,\alpha,\sigma)$ store.
+    \item \textbf{w/o proactive monitor:} no $\pi_{\mathrm{mon}}$; channels queried only if the backbone spontaneously requests them (Single-like monitoring).
+    \item \textbf{w/o lifecycle updates:} cancel/reschedule/override text is stored but $\sigma$ / $\varphi$ are not rewritten---stressing update-sensitive FP/FN.
+    \item \textbf{Retrospective-RAG-only:} retrieve top-$k$ episodic snippets each step and ask the model for dues, with no PIS, monitor policy, or lifecycle API.
+\end{itemize}
+
+\noindent\textbf{Expected findings.}
+Removing PIS or using retrospective-RAG-only should hurt cross-day and overall Set-F1 (commitments get buried). Removing the proactive monitor should collapse channel hit. Disabling lifecycle updates should specifically degrade update-sensitive hit and inflate FP after cancels. Full ProMem should dominate all ablations on Set-F1.
+\vspace{10pt}
+\subsection{Secondary: Synthetic Conditional Instruction Suite}
+
+Beyond Virtual Week, we construct a compact synthetic suite of conditional instructions in tool-using dialogues (e.g., ``when ticket price $<\$X$, buy''; ``if package ships, email me; if canceled, do nothing''). Metrics mirror Set-F1 over discrete decision points, plus false-alarm rate under lure messages.
+
+\begin{table}[h]
+\centering
+\caption{Synthetic conditional-instruction suite (placeholders).}
+\setlength{\tabcolsep}{4pt}
+\label{tab:synthetic}
+\begin{tabular}{l|cccc}
+\toprule
+\textbf{Method} & Set-F1$\uparrow$ & FP$\downarrow$ & FN$\downarrow$ & False-alarm rate$\downarrow$ \\
+\midrule
+Single & -- & -- & -- & -- \\
+Todo-ledger & -- & -- & -- & -- \\
+Optional heartbeat & -- & -- & -- & -- \\
+Retrospective-RAG-only & -- & -- & -- & -- \\
+\midrule
+ProMem (ours) & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\vspace{6pt}
+\end{table}
+
+\noindent\textbf{Expected findings.}
+ProMem should transfer: higher Set-F1 and lower false alarms than RAG-only and Single, with less over-firing than heartbeat-style rechecks when conditions are unmet.
+\vspace{10pt}
+\subsection{Operating-Point Analysis}
+
+\begin{figure*}[t!]
+\centering
+\includegraphics[width=0.85\textwidth]{figure/promem_pr_curve.pdf}
+\caption{Precision--recall / Set-F1 operating points while sweeping $\theta_{\mathrm{due}}$ (and, optionally, heartbeat frequency for baselines). Curves TBD; we expect ProMem to dominate heartbeat scaffolds on the Set-F1-maximizing point.}
+\label{fig:pr-curve}
+\end{figure*}
+
+Spammy monitors can move along a recall-heavy frontier with poor precision. We will plot Set-F1 against FP and against query count. \textbf{Expected finding:} ProMem's intention-conditioned $\pi_{\mathrm{mon}}$ and lure-aware $\pi_{\mathrm{due}}$ yield a superior operating point to auto-heartbeat-30m (high update hit, high FP) and to majority-style over-aggregation reported in PM-Bench.
+\vspace{10pt}
+\subsection{Discussion of Failure Modes (Anticipated)}
+
+We anticipate residual errors when trigger language is ambiguous, when multiple channels interact, or when the backbone mis-parses update referents. Hierarchical fragmentation should be avoided by design, but a single corrupted PIS write could persist; checksum prompts and double-entry of cancel events are mitigations to test.

@@ -1,0 +1,133 @@
+\section{Proposed Method:\\ ProMem}
+\label{sec:methods}
+
+ProMem is an inference-time scaffold for LLM agents that implements conditional memory on top of a frozen backbone. It comprises four components: dual memory stores, a lifecycle manager, a proactive trigger monitor, and a due-set scorer, composed under the PM-Bench query-then-act loop (Figure~\ref{fig:promem-overview}). The full control flow is given in Appendix~\ref{sec:Algorithm}.
+
+\subsection{Problem Statement}
+\label{sec:problem}
+
+Given trajectory observations $\{o_t\}$ under the protocol of Section~3, the agent must produce actions $a_t=(c_t,\hat{D}_t)$ maximizing expected Set-F1 against $\{D_t\}$, subject to realistic monitoring cost. We decompose the policy as
+\begin{equation}
+\label{eq:policy-factor}
+\pi(a_t,q_t\mid o_t,\mathcal{M}_t)
+=
+\pi_{\mathrm{mon}}(q_t\mid o_t,\mathcal{M}_t)\,
+\pi_{\mathrm{due}}(\hat{D}_t\mid o_t,r_t,\mathcal{M}_t)\,
+\pi_{\mathrm{act}}(c_t\mid o_t,r_t,\mathcal{M}_t),
+\end{equation}
+where $\mathcal{M}_t=(\mathcal{E}_t,\mathcal{P}_t)$ denotes dual memory (episodic bank $\mathcal{E}_t$, Prospective Intention Store $\mathcal{P}_t$), $r_t$ are channel returns after queries $q_t$, $\pi_{\mathrm{mon}}$ is the trigger monitor, $\pi_{\mathrm{due}}$ the due-set scorer, and $\pi_{\mathrm{act}}$ selects the mandatory ongoing activity. ProMem specifies the structure of $\mathcal{M}_t$ and the three factors; each factor may be realized by prompting the same backbone with specialized context, or by lightweight scored rules on top of LLM judgments.
+
+\subsection{Dual Memory: Episodic Bank and Prospective Intention Store}
+\label{sec:dual}
+
+\noindent\textbf{Episodic retrospective bank $\mathcal{E}$.}
+Narrative vignettes, prior activity choices, and channel returns that are useful for situational awareness or for answering retrospective probes are appended to $\mathcal{E}$ as timestamped snippets (optionally summarized). Retrieval over $\mathcal{E}$ uses standard similarity or recency and is \emph{not} the primary path for deciding dues.
+
+\noindent\textbf{Prospective Intention Store (PIS) $\mathcal{P}$.}
+Whenever the observation stream announces a deferred task---or an update referring to an existing task---ProMem upserts an intention $I=(\varphi,\alpha,\sigma,\mathrm{meta})$ into $\mathcal{P}$. Triggers $\varphi$ are represented as structured fields plus natural-language glosses, covering the PM-Bench typology:
+\begin{itemize}
+    \item \emph{Time-based:} $\varphi$ references clock predicates (exact time or window).
+    \item \emph{Event- / narrative-based:} $\varphi$ references cues in $v_t$.
+    \item \emph{Channel-based:} $\varphi$ references predicates over specific $h\in\mathcal{H}$ (email subject, portal slot, \ldots).
+\end{itemize}
+Cross-day intentions remain in $\mathcal{P}$ with $\sigma=\textsc{active}$ from announce until the later cue day; they are never demoted merely because the announce-day ended.
+
+Separation is intentional: mixing intentions into a flat episodic store forces the model to rediscover ``this is a deferred commitment'' on every step, which PM-Bench shows is brittle. PIS instead exposes an explicit inventory of open commitments to $\pi_{\mathrm{mon}}$ and $\pi_{\mathrm{due}}$.
+
+\subsection{Lifecycle Manager}
+\label{sec:lifecycle}
+
+The lifecycle manager $\Lambda$ applies deterministic (or LLM-assisted) updates
+\begin{equation}
+(\mathcal{P}_{t+1},\mathcal{E}_{t+1})=\Lambda(\mathcal{P}_t,\mathcal{E}_t,o_t,r_t,a_t,u_t),
+\end{equation}
+where $u_t$ denotes detected update events (cancel / reschedule / override) in the observation stream.
+
+\noindent\textbf{Transition sketch.}
+\begin{itemize}
+    \item \textsc{announce}$\rightarrow$\textsc{active}: parse a new intention; insert into PIS.
+    \item \textsc{active}$\rightarrow$\textsc{fired}: $\alpha\in\hat{D}_t$ under $\pi_{\mathrm{due}}$.
+    \item \textsc{fired}$\rightarrow$\textsc{completed}: environment acknowledges success (or ProMem marks completion when the protocol treats fire as terminal).
+    \item \textsc{active}$\rightarrow$\textsc{canceled}: cancel event naming the intention.
+    \item \textsc{active}$\rightarrow$\textsc{modified}$\rightarrow\textsc{active}: reschedule/override rewrites $\varphi$ (and possibly $\alpha$); previous due windows are invalidated so stale fires count as FP if produced.
+\end{itemize}
+Update-sensitive correctness is therefore a first-class state-machine property: after a cancel, $\pi_{\mathrm{due}}$ must assign near-zero score regardless of cue resemblance; after a reschedule, only the new $\varphi$ may admit membership in $\hat{D}_t$. Retrospective-only systems that keep both old and new phrasings in a bag of snippets routinely violate this constraint.
+
+\noindent\textbf{Parse and referential failures.}
+Announce, cancel, reschedule, and override events require resolving natural-language references to existing PIS entries---a residual error source on PM-Bench update-sensitive slices. ProMem applies a lightweight validation pass after $\Lambda$: ambiguous parses trigger a clarification prompt or conservative dual-write (mark candidate \textsc{canceled} \emph{and} retain \textsc{active} with low $\pi_{\mathrm{due}}$ score until confirmed). Ablations in Section~\ref{sec:experiments} will report whether validation reduces stale-fire FP without suppressing legitimate cross-day carry-over.
+
+\subsection{Proactive Trigger Monitor}
+\label{sec:monitor}
+
+Hidden-channel monitoring is the bottleneck reported by PM-Bench~\cite{pmbench2026}: narrative-cued tasks are comparatively easier, whereas channel-required hits remain low even when agents issue many queries. ProMem therefore treats monitoring as a deliberate policy $\pi_{\mathrm{mon}}$, not an afterthought.
+
+\noindent\textbf{Information state.}
+At step $t$, let $\mathcal{P}_t^{\mathrm{open}}=\{I\in\mathcal{P}_t:\sigma(I)\in\{\textsc{active},\textsc{modified}\}\}$. For each open intention, define a dependency set $\mathrm{deps}(I)\subseteq\mathcal{H}\cup\{\mathrm{narrative}\}$ listing evidence sources that could satisfy $\varphi(I)$. The monitor constructs a priority list
+\begin{equation}
+\label{eq:monitor-score}
+s_{\mathrm{mon}}(h\mid t)=\sum_{I\in\mathcal{P}_t^{\mathrm{open}}} w(I)\,\mathbb{1}[h\in\mathrm{deps}(I)]\,\rho(I,t),
+\end{equation}
+where $w(I)$ weights task importance / regularity if available, and $\rho(I,t)$ is a urgency prior (e.g., higher when a time window is approaching, when a cross-day intention's target day has begun, or when recent narrative mentions a related entity).
+
+\noindent\textbf{Query selection.}
+$\pi_{\mathrm{mon}}$ selects a budgeted set
+\begin{equation}
+q_t=\mathrm{TopK}\big(\{h\in\mathcal{H}:s_{\mathrm{mon}}(h\mid t)\ge\theta_{\mathrm{mon}}\},\,K_t\big),
+\end{equation}
+optionally refined by an LLM call that may add or drop channels given $(v_t,\mathcal{P}_t^{\mathrm{open}})$. Unlike fixed auto-heartbeats every $30$/$60$ virtual minutes, queries are \emph{intention-conditioned}: channels with no open dependents are not polled, reducing monitoring overhead and lure-driven over-acting. Unlike pure optional heartbeats, the default is proactive whenever $s_{\mathrm{mon}}$ exceeds threshold---addressing under-monitoring of non-clock channels.
+
+\noindent\textbf{Stopping.}
+After returns $r_t$, the monitor may issue a second micro-round only if new evidence raises $s_{\mathrm{mon}}$ for a still-unread channel (e.g., email hints at a portal). Hierarchical union-query baselines often fail by never converting extra reads into correct $\hat{D}_t$; ProMem feeds $r_t$ directly into the scorer below.
+
+\subsection{Due-Set Scorer}
+\label{sec:scorer}
+
+Given evidence $e_t=(v_t,r_t)$ and candidate handles $X_t$ (true actions and lures), the scorer $\pi_{\mathrm{due}}$ outputs $\hat{D}_t\subseteq X_t$.
+
+\noindent\textbf{Candidate generation.}
+For each $x\in X_t$, retrieve matching intentions $\mathcal{M}(x)\subseteq\mathcal{P}_t^{\mathrm{open}}$ by handle identity or fuzzy label match. Lures typically have $\mathcal{M}(x)=\emptyset$ or only weak lexical overlap with inactive/canceled records.
+
+\noindent\textbf{Scoring.}
+For each $x$,
+\begin{equation}
+\label{eq:due-score}
+s_{\mathrm{due}}(x\mid e_t)=
+\max_{I\in\mathcal{M}(x)}
+\Big(
+\mathrm{sat}(\varphi(I),e_t)
+-
+\lambda_{\mathrm{life}}\cdot\mathrm{pen}(\sigma(I))
+-
+\lambda_{\mathrm{lure}}\cdot\mathrm{lure}(x)
+\Big),
+\end{equation}
+where $\mathrm{sat}\in[0,1]$ is an LLM- or rule-based satisfaction score of trigger $\varphi$ under evidence $e_t$; $\mathrm{pen}$ heavily penalizes \textsc{canceled}/\textsc{completed} and mildly penalizes stale \textsc{modified} shells; $\mathrm{lure}(x)$ is high when $x$ is not grounded in any open $I$. Then
+\begin{equation}
+\hat{D}_t=\{x\in X_t:s_{\mathrm{due}}(x\mid e_t)\ge\theta_{\mathrm{due}}\}.
+\end{equation}
+Threshold $\theta_{\mathrm{due}}$ traces a precision--recall curve: lower values raise recall (and FP), higher values favor conservative precision. ProMem tunes $\theta_{\mathrm{due}}$ (and $\theta_{\mathrm{mon}}$) on a small development week when available; otherwise a prompted self-consistency vote approximates the threshold.
+
+\noindent\textbf{Why this helps Set-F1.}
+Auto-heartbeats increase the chance that $\mathrm{sat}$ is evaluated with fresh clock evidence, but without PIS grounding they also increase spurious $\mathrm{sat}$ on lures. Explicit $\mathrm{pen}(\sigma)$ and $\mathrm{lure}(x)$ terms target the FP explosion observed when monitoring is decoupled from intention state~\cite{pmbench2026}.
+
+\subsection{Integration with Ongoing Activity Choice}
+\label{sec:integrate}
+
+PM-Bench requires a mandatory ongoing activity $c_t\in\mathcal{C}_t$ every step. ProMem does not replace this choice; it conditions it lightly on open intentions:
+\begin{equation}
+\pi_{\mathrm{act}}(c_t)\propto \mathrm{LLM}(v_t,\mathcal{C}_t,\mathrm{brief}(\mathcal{P}_t^{\mathrm{open}})),
+\end{equation}
+where $\mathrm{brief}(\cdot)$ lists only time-critical or narrative-linked commitments so the model prefers activities compatible with imminent dues when the vignette allows. The due decision $\hat{D}_t$ remains separate: agents may (and often must) both progress an unrelated ongoing task and fire a due intention in the same step---matching human PM dual-task structure.
+
+\noindent\textbf{End-to-end step.}
+(1)~Update PIS/episodic bank from $o_t$ via $\Lambda$ (ingest announces/updates). (2)~Run $\pi_{\mathrm{mon}}$ to obtain $r_t$. (3)~Score dues with $\pi_{\mathrm{due}}$. (4)~Choose $c_t$ with $\pi_{\mathrm{act}}$. (5)~Commit $a_t$, then finalize lifecycle transitions (\textsc{fired}/\textsc{completed}). Pseudocode appears as Algorithm~\ref{alg:promem}.
+
+\subsection{Design Rationale Relative to PM-Bench Scaffolds}
+\label{sec:rationale}
+
+\begin{itemize}
+    \item \textbf{vs.\ Single:} adds external conditional state so the backbone need not hold all open $\varphi$ only in the context window.
+    \item \textbf{vs.\ Todo-ledger:} ledger text is replaced by typed $(\varphi,\alpha,\sigma)$ records consumed by monitor and scorer APIs, not only by unstructured reading.
+    \item \textbf{vs.\ Heartbeats:} monitoring is allocated by $\mathrm{deps}(I)$ and urgency $\rho$, aiming for higher channel hit per query and fewer FP.
+    \item \textbf{vs.\ Hierarchical union-query:} a single coordinated PIS avoids fragmented commitments across subagents that PM-Bench found harmful for cross-day hit.
+\end{itemize}

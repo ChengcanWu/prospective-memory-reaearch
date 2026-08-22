@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": "python -X utf8 .cursor/hooks/grind.py",
+        "timeout": 20,
+        "loop_limit": 20
+      }
+    ]
+  }
+}
